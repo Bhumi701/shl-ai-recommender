@@ -17,7 +17,7 @@ app.add_middleware(
 )
 
 # Load embedding model
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer("paraphrase-MiniLM-L3-v2")
 
 # Step 1: Load catalog (fallback JSON for local testing)
 # Replace this with real scraping or API later
@@ -37,10 +37,17 @@ if len(embeddings) == 0:
 index = faiss.IndexFlatL2(embeddings.shape[1])
 index.add(np.array(embeddings))
 
-def search_catalog(query, k=10):
+"""def search_catalog(query, k=10):
     q_emb = model.encode([query])
     D, I = index.search(np.array(q_emb), k)
-    return [catalog[i] for i in I[0]]
+    return [catalog[i] for i in I[0]]"""
+    
+def search_catalog(query, k=10):
+    q_emb = model.encode([query])
+    sims = np.dot(embeddings, q_emb.T).flatten()
+    top_k = np.argsort(sims)[-k:][::-1]
+    return [catalog[i] for i in top_k]
+
 
 @app.get("/health")
 def health():
