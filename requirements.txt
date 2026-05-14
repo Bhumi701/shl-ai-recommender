@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+requests
+beautifulsoup4
+faiss-cpu
+sentence-transformers
+numpy
+scipy
+pydantic  
+pytest
+pytest-cov
