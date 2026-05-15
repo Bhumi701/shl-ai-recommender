@@ -1,13 +1,11 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-import faiss
-from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-import json
 
 app = FastAPI()
 
-# Add CORS middleware to allow cross-origin requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,86 +14,65 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load embedding model
-model = SentenceTransformer("paraphrase-MiniLM-L3-v2")
 
-# Step 1: Load catalog (fallback JSON for local testing)
-# Replace this with real scraping or API later
 catalog = [
-    {"name": "OPQ32r", "url": "https://www.shl.com/opq32r", "description": "Personality assessment", "test_type": "P"},
-    {"name": "Java Developer Test", "url": "https://www.shl.com/java-test", "description": "Technical skill test", "test_type": "K"},
-    {"name": "Numerical Reasoning Test", "url": "https://www.shl.com/numerical", "description": "Numerical ability assessment", "test_type": "A"}
+    {"name": "OPQ32r",                 "url": "https://www.shl.com/opq32r",    "description": "Personality assessment for workplace behaviour",  "test_type": "P"},
+    {"name": "Java Developer Test",    "url": "https://www.shl.com/java-test", "description": "Technical skill test for Java developers",          "test_type": "K"},
+    {"name": "Numerical Reasoning Test","url": "https://www.shl.com/numerical","description": "Numerical ability and data interpretation assessment","test_type": "A"},
 ]
 
-# Step 2: Build vector index safely
-texts = [item["description"] for item in catalog if item["description"]]
-embeddings = model.encode(texts)
 
-if len(embeddings) == 0:
-    raise ValueError("Catalog is empty. Please check scraping or JSON fallback.")
+texts = [item["description"] for item in catalog]
 
-index = faiss.IndexFlatL2(embeddings.shape[1])
-index.add(np.array(embeddings))
+vectorizer = TfidfVectorizer()
+tfidf_matrix = vectorizer.fit_transform(texts)   # sparse matrix, very light
 
-"""def search_catalog(query, k=10):
-    q_emb = model.encode([query])
-    D, I = index.search(np.array(q_emb), k)
-    return [catalog[i] for i in I[0]]"""
-    
-def search_catalog(query, k=10):
-    q_emb = model.encode([query])
-    sims = np.dot(embeddings, q_emb.T).flatten()
+
+def search_catalog(query: str, k: int = 10):
+    """Return top-k catalog items ranked by TF-IDF cosine similarity."""
+    q_vec = vectorizer.transform([query])
+    sims  = cosine_similarity(q_vec, tfidf_matrix).flatten()
     top_k = np.argsort(sims)[-k:][::-1]
-    return [catalog[i] for i in top_k]
+    return [catalog[i] for i in top_k if sims[i] > 0]   # skip zero-score items
+
+
+def _is_vague(msg: str) -> bool:
+    return "assessment" in msg.lower() and len(msg.split()) < 4
+
+
+def _build_response(user_msg: str):
+    if _is_vague(user_msg):
+        return {
+            "reply": "Could you clarify the role, seniority level, or skill area you need an assessment for?",
+            "recommendations": [],
+            "end_of_conversation": False,
+        }
+
+    results = search_catalog(user_msg, k=5)
+    recs    = [{"name": r["name"], "url": r["url"], "test_type": r["test_type"]} for r in results]
+
+    reply = (
+        f"Here are {len(recs)} assessments that match your query."
+        if recs
+        else "No matching assessments found. Try describing the role or skill you need."
+    )
+    return {"reply": reply, "recommendations": recs, "end_of_conversation": False}
+
 
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
+
 @app.get("/chat")
 def chat_get(query: str = "assessment"):
-    """GET endpoint for testing /chat endpoint from browser"""
-    user_msg = query
-    
-    # Clarify vague queries
-    if "assessment" in user_msg.lower() and len(user_msg.split()) < 4:
-        return {
-            "reply": "Could you clarify role, seniority, or skill area?",
-            "recommendations": [],
-            "end_of_conversation": False
-        }
+    return _build_response(query)
 
-    # Search catalog
-    results = search_catalog(user_msg, k=5)
-    recs = [{"name": r["name"], "url": r["url"], "test_type": r["test_type"]} for r in results]
-
-    return {
-        "reply": f"Here are {len(recs)} assessments that match your query.",
-        "recommendations": recs,
-        "end_of_conversation": False
-    }
 
 @app.post("/chat")
-async def chat(request: Request):
-    data = await request.json()
+async def chat_post(request: Request):
+    data     = await request.json()
     messages = data.get("messages", [])
     user_msg = messages[-1]["content"] if messages else ""
-
-    # Clarify vague queries
-    if "assessment" in user_msg.lower() and len(user_msg.split()) < 4:
-        return {
-            "reply": "Could you clarify role, seniority, or skill area?",
-            "recommendations": [],
-            "end_of_conversation": False
-        }
-
-    # Search catalog
-    results = search_catalog(user_msg, k=5)
-    recs = [{"name": r["name"], "url": r["url"], "test_type": r["test_type"]} for r in results]
-
-    return {
-        "reply": f"Here are {len(recs)} assessments that match your query.",
-        "recommendations": recs,
-        "end_of_conversation": False
-    }
+    return _build_response(user_msg)
