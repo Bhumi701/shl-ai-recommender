@@ -9,3 +9,4 @@ scipy
 pydantic  
 pytest
 pytest-cov
+scikit-learn
